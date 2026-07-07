@@ -2,23 +2,23 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"time"
 
 	"github.com/google/uuid"
 
+	"Smart_Task_Manager/internal/database" // Updated to use your wrapper
 	"Smart_Task_Manager/internal/domain/entities"
 	"Smart_Task_Manager/internal/repository/interfaces"
 )
 
 // userRepository is the concrete implementation of interfaces.UserRepository
 type userRepository struct {
-	db *sql.DB
+	db *database.DB // Changed from *sql.DB to *database.DB
 }
 
 // NewUserRepository creates a new instance of UserRepository
-func NewUserRepository(db *sql.DB) interfaces.UserRepository {
+func NewUserRepository(db *database.DB) interfaces.UserRepository {
 	return &userRepository{db: db}
 }
 
@@ -29,16 +29,16 @@ func NewUserRepository(db *sql.DB) interfaces.UserRepository {
 // Create saves a new user into the database
 func (r *userRepository) Create(ctx context.Context, user *entities.User) error {
 	query := `
-		INSERT INTO users (id, username, email, password_hash, created_at, updated_at) 
-		VALUES ($1, $2, $3, $4, $5, $6)`
+        INSERT INTO users (id, username, email, password_hash, created_at, updated_at) 
+        VALUES ($1, $2, $3, $4, $5, $6)`
 
-	// Ensure timestamps are set before inserting
 	if user.CreatedAt.IsZero() {
 		user.CreatedAt = time.Now()
 	}
 	user.UpdatedAt = user.CreatedAt
 
-	_, err := r.db.ExecContext(ctx, query,
+	// Using the DB wrapper which includes retry logic and metrics
+	_, err := r.db.Exec(ctx, query,
 		user.ID, user.Username, user.Email, user.PasswordHash,
 		user.CreatedAt, user.UpdatedAt,
 	)
@@ -67,13 +67,14 @@ func (r *userRepository) GetByEmail(ctx context.Context, email string) (*entitie
 // Update modifies existing user details
 func (r *userRepository) Update(ctx context.Context, user *entities.User) error {
 	query := `
-		UPDATE users SET 
-			username = $1, email = $2, password_hash = $3, updated_at = $4
-		WHERE id = $5`
+        UPDATE users SET 
+            username = $1, email = $2, password_hash = $3, updated_at = $4
+        WHERE id = $5`
 
 	user.UpdatedAt = time.Now()
 
-	result, err := r.db.ExecContext(ctx, query,
+	// Using the DB wrapper
+	tag, err := r.db.Exec(ctx, query,
 		user.Username, user.Email, user.PasswordHash, user.UpdatedAt,
 		user.ID,
 	)
@@ -81,12 +82,8 @@ func (r *userRepository) Update(ctx context.Context, user *entities.User) error 
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rowsAffected == 0 {
-		return errors.New("user not found") // يفضل استخدام ErrUserNotFound الخاص بك لاحقاً
+	if tag.RowsAffected() == 0 {
+		return errors.New("user not found")
 	}
 
 	return nil
@@ -96,27 +93,23 @@ func (r *userRepository) Update(ctx context.Context, user *entities.User) error 
 func (r *userRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	query := `DELETE FROM users WHERE id = $1`
 
-	result, err := r.db.ExecContext(ctx, query, id)
+	tag, err := r.db.Exec(ctx, query, id)
 	if err != nil {
 		return err
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rowsAffected == 0 {
+	if tag.RowsAffected() == 0 {
 		return errors.New("user not found")
 	}
 
 	return nil
 }
 
-// List retrieves all users (simple list)
+// List retrieves all users
 func (r *userRepository) List(ctx context.Context) ([]*entities.User, error) {
 	query := `SELECT id, username, email, password_hash, created_at, updated_at FROM users ORDER BY created_at DESC`
 
-	rows, err := r.db.QueryContext(ctx, query)
+	rows, err := r.db.Query(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -135,11 +128,7 @@ func (r *userRepository) List(ctx context.Context) ([]*entities.User, error) {
 		users = append(users, user)
 	}
 
-	if err = rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return users, nil
+	return users, rows.Err()
 }
 
 // =========================================================================
@@ -147,20 +136,17 @@ func (r *userRepository) List(ctx context.Context) ([]*entities.User, error) {
 // =========================================================================
 
 // fetchUser is a helper method to execute a query that returns a single user.
-// This prevents code duplication in GetByID, GetByUsername, and GetByEmail.
 func (r *userRepository) fetchUser(ctx context.Context, query string, args ...any) (*entities.User, error) {
 	user := &entities.User{}
 
-	err := r.db.QueryRowContext(ctx, query, args...).Scan(
+	// Using the DB wrapper's QueryRow method
+	err := r.db.QueryRow(ctx, query, args...).Scan(
 		&user.ID, &user.Username, &user.Email, &user.PasswordHash,
 		&user.CreatedAt, &user.UpdatedAt,
 	)
 
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New("user not found")
-		}
-		return nil, err
+		return nil, errors.New("user not found")
 	}
 
 	return user, nil
