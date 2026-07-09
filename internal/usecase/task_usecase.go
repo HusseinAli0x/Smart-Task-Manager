@@ -11,6 +11,7 @@ import (
 	"Smart_Task_Manager/internal/domain/enums"
 	domainErrors "Smart_Task_Manager/internal/domain/errors"
 	"Smart_Task_Manager/internal/repository/interfaces"
+	"Smart_Task_Manager/internal/utils"
 )
 
 // =========================================================================
@@ -87,6 +88,7 @@ func NewTaskUseCase(repo interfaces.TaskRepository) TaskUseCase {
 // =========================================================================
 
 // Create validates and stores a newly extracted AI smart task
+// Create validates and stores a newly extracted AI smart task
 func (u *taskUseCase) Create(ctx context.Context, input CreateTaskInput) (*TaskOutput, error) {
 	// 1. Convert and validate priority enum value
 	taskPriority := enums.TaskPriority(input.Priority)
@@ -110,13 +112,27 @@ func (u *taskUseCase) Create(ctx context.Context, input CreateTaskInput) (*TaskO
 		subTasks = json.RawMessage("[]")
 	}
 
+	// --- AI ENHANCEMENT START ---
+	// If description is missing, generate it using Gemini
+	var description *string
+	if input.Description != nil && *input.Description != "" {
+		description = input.Description
+	} else {
+		// Call Gemini service
+		aiDesc, err := utils.GenerateTaskDescription(ctx, input.Title)
+		if err == nil && aiDesc != "" {
+			description = &aiDesc
+		}
+	}
+	// --- AI ENHANCEMENT END ---
+
 	// 4. Transform DTO payload into domain entity
 	task := &entities.Task{
 		ID:          uuid.New(),
 		UserID:      input.UserID,
 		RawText:     input.RawText,
 		Title:       input.Title,
-		Description: input.Description,
+		Description: description, // Now potentially AI-generated
 		Category:    taskCategory,
 		Priority:    taskPriority,
 		DueDate:     input.DueDate,
